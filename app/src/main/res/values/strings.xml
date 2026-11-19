@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">SensorGuard</string>
+    <string name="service_listener_label">SensorGuard Media Monitor</string>
+    <string name="tile_bypass_label">Pause Media (Bypass Guard)</string>
+    <string name="channel_guard_title">Earbud Guard &amp; Battery</string>
+    <string name="channel_guard_desc">Foreground monitor for phantom pauses and BLE earbud battery</string>
+    <string name="action_pause_bypass">Pause Media (Bypass Guard)</string>
+    <string name="action_toggle_guard">Toggle Guard ON/OFF</string>
+</resources>
