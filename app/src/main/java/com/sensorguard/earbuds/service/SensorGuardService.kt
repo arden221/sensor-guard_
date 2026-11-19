@@ -41,7 +41,7 @@ class SensorGuardService : Service() {
     private var audioManager: AudioManager? = null
     private var bleScanner: BluetoothLeScanner? = null
     private var isScanningBle = false
-    private var bleLoopJob: Job? null
+    private var bleLoopJob: Job? = null
 
     private val audioDeviceCallback = object : AudioDeviceCallback() {
         override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) {
