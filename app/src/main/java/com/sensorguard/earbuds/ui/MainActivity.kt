@@ -73,12 +73,11 @@ data class PermissionChecklistState(
     val notificationListenerEnabled: Boolean = false,
     val batteryOptimizationIgnored: Boolean = false
 ) {
-    val completedCount: Int
+    val coreCompletedCount: Int
         get() = listOf(
             btConnectGranted,
             btScanGranted,
             postNotificationsGranted,
-            notificationListenerEnabled,
             batteryOptimizationIgnored
         ).count { it }
 }
@@ -105,6 +104,13 @@ class MainActivity : ComponentActivity() {
                         onPermissionsResult = { refreshStatuses() },
                         onOpenNotificationListenerSettings = {
                             startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+                        },
+                        onOpenAppInfoSettings = {
+                            val intent = Intent(
+                                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                Uri.parse("package:$packageName")
+                            )
+                            startActivity(intent)
                         },
                         onRequestIgnoreBatteryOptimizations = {
                             requestBatteryOptimizationExemption()
@@ -202,6 +208,7 @@ fun SensorGuardDashboard(
     perms: PermissionChecklistState,
     onPermissionsResult: () -> Unit,
     onOpenNotificationListenerSettings: () -> Unit,
+    onOpenAppInfoSettings: () -> Unit,
     onRequestIgnoreBatteryOptimizations: () -> Unit,
     onToggleForegroundService: (Boolean) -> Unit
 ) {
@@ -219,7 +226,6 @@ fun SensorGuardDashboard(
     val manualCooldownUntil by GuardRepository.manualCooldownUntilElapsed.collectAsStateWithLifecycle()
     val loopLockoutUntil by GuardRepository.loopLockoutUntilElapsed.collectAsStateWithLifecycle()
 
-    // Tick every second while cooldown or lockout is active so countdown badges update live
     var nowElapsed by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
     LaunchedEffect(manualCooldownUntil, loopLockoutUntil) {
         while (SystemClock.elapsedRealtime() < maxOf(manualCooldownUntil, loopLockoutUntil)) {
@@ -232,13 +238,15 @@ fun SensorGuardDashboard(
     val cooldownSecLeft = ((manualCooldownUntil - nowElapsed) / 1000L).coerceAtLeast(0L)
     val lockoutSecLeft = ((loopLockoutUntil - nowElapsed) / 1000L).coerceAtLeast(0L)
 
-    var showPermissionsExpanded by remember(perms.completedCount) {
-        mutableStateOf(perms.completedCount < 5)
+    var showPermissionsExpanded by remember(perms.coreCompletedCount) {
+        mutableStateOf(perms.coreCompletedCount < 4)
     }
 
     val singlePermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { onPermissionsResult() }
+
+    val anyGuardEngineReady = listenerConnected || serviceRunning
 
     Scaffold(
         topBar = {
@@ -275,12 +283,13 @@ fun SensorGuardDashboard(
             // 1. Hero Guard Status & Master Controls
             item {
                 val (statusLabel, statusColor) = when {
-                    !perms.notificationListenerEnabled -> "Listener Access Needed" to CoralAlert
+                    !anyGuardEngineReady -> "Tap Start Service to Activate" to AmberWarn
                     !guardEnabled -> "Guard Paused (OFF)" to TextSecondary
                     lockoutSecLeft > 0L -> "Loop Lockout (${lockoutSecLeft}s)" to AmberWarn
                     cooldownSecLeft > 0L -> "Manual Bypass (${cooldownSecLeft}s)" to AmberWarn
                     activeA2dpNames.isEmpty() -> "Standby • Waiting for A2DP" to CyanPrimary
-                    else -> "Active • Protecting Audio" to EmeraldOk
+                    listenerConnected -> "Active • MediaSession Shield" to EmeraldOk
+                    else -> "Active • AudioFallback Shield" to EmeraldOk
                 }
 
                 DashboardCard {
@@ -321,7 +330,7 @@ fun SensorGuardDashboard(
                                 overflow = TextOverflow.Ellipsis
                             )
                             Text(
-                                text = "Session Listener: ${if (listenerConnected) "Connected" else "Disconnected"} • Service: ${if (serviceRunning) "Running" else "Stopped"}",
+                                text = "Engine: ${if (listenerConnected) "MediaSession" else "AudioPlayback Fallback"} • Service: ${if (serviceRunning) "Running" else "Stopped"}",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = TextSecondary
                             )
@@ -393,9 +402,9 @@ fun SensorGuardDashboard(
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = "${perms.completedCount}/5 steps ready",
+                                text = "${perms.coreCompletedCount}/4 core permissions ready",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = if (perms.completedCount == 5) EmeraldOk else AmberWarn
+                                color = if (perms.coreCompletedCount == 4) EmeraldOk else AmberWarn
                             )
                         }
                         TextButton(onClick = { showPermissionsExpanded = !showPermissionsExpanded }) {
@@ -443,15 +452,27 @@ fun SensorGuardDashboard(
                             }
                         )
                         PermissionStepRow(
-                            label = "Notification Access (MediaSession)",
-                            granted = perms.notificationListenerEnabled,
-                            onClick = onOpenNotificationListenerSettings
-                        )
-                        PermissionStepRow(
                             label = "Battery Optimization Exemption",
                             granted = perms.batteryOptimizationIgnored,
                             onClick = onRequestIgnoreBatteryOptimizations
                         )
+                        PermissionStepRow(
+                            label = "Notification Access (Optional — Fallback Active)",
+                            granted = perms.notificationListenerEnabled,
+                            onClick = onOpenNotificationListenerSettings
+                        )
+                        if (!perms.notificationListenerEnabled) {
+                            TextButton(
+                                onClick = onOpenAppInfoSettings,
+                                contentPadding = PaddingValues(0.dp)
+                            ) {
+                                Text(
+                                    text = "Grayed out? Open App Info -> ⋮ -> Allow restricted settings",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = CyanPrimary
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -579,7 +600,7 @@ fun SensorGuardDashboard(
                 item {
                     DashboardCard {
                         Text(
-                            text = "No events yet. Play audio on your earbuds to see live MediaSession transitions.",
+                            text = "No events yet. Tap Start Service and play audio on your earbuds.",
                             style = MaterialTheme.typography.bodySmall,
                             color = TextSecondary
                         )
@@ -588,7 +609,9 @@ fun SensorGuardDashboard(
             } else {
                 items(eventLogs, key = { it.id }) { item ->
                     val logColor = when {
-                        item.message.contains("Resumed") || item.message.contains("Phantom pause") -> EmeraldOk
+                        item.message.contains("Resumed") ||
+                            item.message.contains("Phantom pause") ||
+                            item.message.contains("resumed playback") -> EmeraldOk
                         item.message.contains("LOOP PROTECTION") -> CoralAlert
                         item.message.contains("Manual bypass") -> AmberWarn
                         else -> TextSecondary

@@ -14,17 +14,14 @@ import android.view.KeyEvent
 import com.sensorguard.earbuds.data.GuardRepository
 
 /**
- * Monitors active MediaSessions via MediaSessionManager and registers a MediaController.Callback
- * on every active media controller.
+ * Primary MediaSession monitor via NotificationListenerService + MediaSessionManager.
+ * If the device restricts Notification Access, SensorGuardService automatically activates its
+ * AudioPlaybackCallback + KEYCODE_MEDIA_PLAY fallback guard so phantom-pause protection still works.
  *
  * ANDROID PLATFORM LIMITATION ON PAUSE ORIGIN:
  * Android's MediaSession framework does NOT expose whether a PlaybackState transition from
  * STATE_PLAYING to STATE_PAUSED was triggered by an on-screen user tap, a lock-screen button,
- * or a hardware AVRCP/in-ear proximity sensor event from Bluetooth earbuds. Because an unprivileged
- * app cannot reliably detect screen taps inside third-party media apps without invasive Accessibility
- * overlays, SensorGuard uses timing heuristics (continuous playback >= 2 seconds or rapid-pause burst
- * detection) combined with active Bluetooth A2DP routing and an explicit "Pause Media (Bypass Guard)"
- * manual override action in the notification and Quick Settings tile.
+ * or a hardware AVRCP/in-ear proximity sensor event from Bluetooth earbuds.
  */
 class MediaMonitorListener : NotificationListenerService() {
 
@@ -71,14 +68,14 @@ class MediaMonitorListener : NotificationListenerService() {
         super.onListenerConnected()
         GuardRepository.setListenerConnected(true)
         GuardRepository.refreshAudioDevicesAndBondedList(applicationContext)
-        GuardRepository.appendLog("NotificationListener connected; attaching MediaSession observer")
+        GuardRepository.appendLog("NotificationListener connected; using MediaSession mode")
         registerSessionObserver()
     }
 
     override fun onListenerDisconnected() {
         super.onListenerDisconnected()
         GuardRepository.setListenerConnected(false)
-        GuardRepository.appendLog("NotificationListener disconnected")
+        GuardRepository.appendLog("NotificationListener disconnected; AudioPlayback fallback ready")
         unregisterSessionObserver()
     }
 
@@ -101,7 +98,8 @@ class MediaMonitorListener : NotificationListenerService() {
             syncControllers(initial)
             mgr.addOnActiveSessionsChangedListener(activeSessionsListener, comp, mainHandler)
         } catch (sec: SecurityException) {
-            GuardRepository.appendLog("MediaSession access denied: enable Notification Access")
+            GuardRepository.setListenerConnected(false)
+            GuardRepository.appendLog("MediaSession access denied; using AudioPlayback fallback")
         }
     }
 
@@ -190,7 +188,6 @@ class MediaMonitorListener : NotificationListenerService() {
             }
 
             PlaybackState.STATE_BUFFERING -> {
-                // Keep playingStartedElapsed intact if transitioning PLAYING -> BUFFERING -> PAUSED
                 tracked.lastState = newState
             }
 
@@ -300,7 +297,6 @@ class MediaMonitorListener : NotificationListenerService() {
                     controller.transportControls.play()
                     GuardRepository.appendLog("Resumed $pkg via transportControls.play()")
 
-                    // Fallback verification: if player ignored transportControls.play(), nudge with MEDIA_PLAY
                     mainHandler.postDelayed({
                         val checkTime = SystemClock.elapsedRealtime()
                         val stillPaused = controller.playbackState?.state == PlaybackState.STATE_PAUSED

@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.os.Build
+import android.view.KeyEvent
 import androidx.core.content.ContextCompat
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.*
@@ -203,11 +204,6 @@ object GuardRepository {
         _batteryState.value = state
     }
 
-    /**
-     * Queries AudioManager directly for active Bluetooth A2DP output sinks and bonded devices.
-     * Callable from SensorGuardService, MediaMonitorListener, and MainActivity so A2DP detection
-     * stays accurate even if the foreground service was not manually started.
-     */
     fun refreshAudioDevicesAndBondedList(context: Context) {
         val audioMgr = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
         if (audioMgr != null) {
@@ -255,10 +251,6 @@ object GuardRepository {
         }
     }
 
-    /**
-     * Live check for whether a guarded Bluetooth A2DP sink is currently routing audio.
-     * Empty whitelist means any active Bluetooth A2DP output is guarded.
-     */
     fun isGuardedA2dpConnected(context: Context? = appContext): Boolean {
         if (context != null) {
             refreshAudioDevicesAndBondedList(context)
@@ -270,7 +262,6 @@ object GuardRepository {
         val whitelist = _whitelistedAddresses.value
         if (whitelist.isEmpty()) return true
 
-        // Match by MAC address first; if OEM hides MAC in AudioDeviceInfo, also check bonded device name match
         if (activeAddrs.any { whitelist.contains(it.uppercase(Locale.US)) }) return true
 
         val whitelistedNames = _pairedDevices.value
@@ -285,6 +276,19 @@ object GuardRepository {
         val cooldownEnd = nowElapsedRealtime + 30_000L
         _manualCooldownUntilElapsed.value = cooldownEnd
         val pausedSessions = pauseAllSessionsAction?.invoke() ?: 0
+        if (pausedSessions == 0) {
+            // Fallback when NotificationListenerService is not granted/active
+            val audioMgr = appContext?.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+            if (audioMgr != null && audioMgr.isMusicActive) {
+                try {
+                    audioMgr.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_PAUSE))
+                    audioMgr.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MEDIA_PAUSE))
+                    appendLog("Manual bypass pause ($origin): sent KEYCODE_MEDIA_PAUSE, guard suppressed 30s")
+                    return
+                } catch (_: Exception) {
+                }
+            }
+        }
         appendLog("Manual bypass pause ($origin): paused $pausedSessions session(s), guard suppressed for 30s")
     }
 
